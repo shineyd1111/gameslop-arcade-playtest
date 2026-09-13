@@ -1,0 +1,184 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      name="viewport"
+      content="width=device-width,initial-scale=1,viewport-fit=cover"
+    />
+    <title>GameSlop Retro Player</title>
+    <style>
+      html,
+      body,
+      #game {
+        width: 100%;
+        height: 100%;
+        margin: 0;
+        background: #080c12;
+        color: #eee;
+        font-family: system-ui;
+      }
+      #notice {
+        position: absolute;
+        inset: 0;
+        display: grid;
+        place-content: center;
+        text-align: center;
+        padding: 20px;
+      }
+      #game .ejs_menu_bar.ejs_menu_bar_hidden {
+        visibility: hidden;
+        pointer-events: none;
+      }
+      #notice p {
+        color: #a6b3bd;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="game"></div>
+    <div id="notice">
+      <h2>INSERT CARTRIDGE</h2>
+      <p>Waiting for your selection…</p>
+    </div>
+    <script>
+      const notify = (status) =>
+        parent.postMessage(
+          { type: "gameslop-retro-status", status },
+          location.origin,
+        );
+      let loaded = false,
+        urls = [];
+      window.addEventListener("message", (event) => {
+        if (
+          event.origin !== location.origin ||
+          event.source !== parent ||
+          event.data?.type !== "gameslop-retro-load" ||
+          loaded
+        )
+          return;
+        const { core, file, bios } = event.data;
+        if (!["nes", "snes", "segaMD", "arcade", "gba"].includes(core)) return;
+        loaded = true;
+        const localUrl = (f) => {
+          const url = URL.createObjectURL(f);
+          urls.push(url);
+          return url;
+        };
+        window.EJS_player = "#game";
+        window.EJS_core = core;
+        window.EJS_gameUrl =
+          file instanceof File
+            ? localUrl(file)
+            : new URL("roms/nes-starter-kit.nes", location.href).href;
+        if (bios instanceof File) window.EJS_biosUrl = localUrl(bios);
+        window.EJS_gameName =
+          file instanceof File ? file.name : "NES Starter Kit Adventure";
+        window.EJS_pathtodata = "https://cdn.emulatorjs.org/4.2.3/data/";
+        window.EJS_color = "#c5ff63";
+        window.EJS_backgroundColor = "#080c12";
+        window.EJS_startOnLoaded = false;
+        window.EJS_startButtonName = "POWER ON";
+        window.EJS_threads = false;
+        window.EJS_language = "en-US";
+        window.EJS_volume = 0.45;
+        window.EJS_Buttons = {
+          playPause: true,
+          restart: true,
+          mute: true,
+          settings: true,
+          fullscreen: true,
+          saveState: true,
+          loadState: true,
+          gamepad: true,
+          cheat: false,
+          netplay: false,
+        };
+        const bootTimeout = setTimeout(() => {
+          document.querySelector("#notice").innerHTML =
+            "<h2>TAKING LONGER THAN EXPECTED</h2><p>The emulator service may be unavailable. Eject and retry with a stable connection.</p>";
+          notify("error");
+        }, 45000);
+        window.EJS_ready = () => {
+          clearTimeout(bootTimeout);
+          // EmulatorJS 4.2.3 skips its coarse-pointer fallback when a browser
+          // exposes maxTouchPoints as zero. That leaves the touch menu missing.
+          const emulator = window.EJS_emulator;
+          if (
+            !emulator.hasTouchScreen &&
+            matchMedia("(any-pointer:coarse)").matches
+          ) {
+            emulator.hasTouchScreen = true;
+            if (emulator.virtualGamepad && !emulator.elements.menuToggle) {
+              emulator.virtualGamepad.remove();
+              emulator.setVirtualGamepad();
+            }
+          }
+          emulator.on("start-clicked", () => notify("loading"));
+          emulator.on("exit", () => notify("stopped"));
+          document.querySelector("#notice").style.display = "none";
+          notify("ready");
+        };
+        new MutationObserver(() => {
+          if (document.querySelector(".ejs_error_text")) notify("error");
+        }).observe(document.querySelector("#game"), {
+          subtree: true,
+          childList: true,
+          attributes: true,
+          attributeFilter: ["class"],
+        });
+        window.EJS_onGameStart = () => {
+          const emulator = window.EJS_emulator;
+          if (emulator.hasTouchScreen) emulator.menu.close();
+          // Start/select must span a few emulated frames, even for very quick
+          // touch taps. Long presses keep the upstream timing unchanged.
+          for (const [selector, input] of [
+            [".b_start", 3],
+            [".b_select", 2],
+          ]) {
+            const button = document.querySelector(selector);
+            if (!button) continue;
+            let pressedAt = 0;
+            button.addEventListener(
+              "touchstart",
+              () => {
+                pressedAt = performance.now();
+              },
+              { capture: true, passive: true },
+            );
+            button.addEventListener(
+              "touchend",
+              (event) => {
+                event.preventDefault();
+                event.stopImmediatePropagation();
+                button.classList.remove("ejs_virtualGamepad_button_down");
+                setTimeout(
+                  () => emulator.gameManager.simulateInput(0, input, 0),
+                  Math.max(0, 80 - (performance.now() - pressedAt)),
+                );
+              },
+              { capture: true, passive: false },
+            );
+          }
+          notify("playing");
+        };
+        window.EJS_onExit = () => notify("stopped");
+        document.querySelector("#notice").innerHTML =
+          "<h2>BOOTING CABINET</h2><p>Loading emulator. First launch may take a moment.</p>";
+        const script = document.createElement("script");
+        script.src = window.EJS_pathtodata + "loader.js";
+        script.onerror = () => {
+          clearTimeout(bootTimeout);
+          document.querySelector("#notice").innerHTML =
+            "<h2>CONNECTION FAILED</h2><p>Return to the cabinet and retry.</p>";
+          notify("error");
+        };
+        document.body.append(script);
+      });
+      window.addEventListener("beforeunload", () =>
+        urls.forEach(URL.revokeObjectURL),
+      );
+      notify("waiting");
+    </script>
+  </body>
+</html>
